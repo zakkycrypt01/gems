@@ -126,36 +126,58 @@ def find_gems():
         # Metrics
         liquidity = float(pair.get('liquidity', {}).get('usd', 0))
         volume_24h = float(pair.get('volume', {}).get('h24', 0))
+        price_change_m5 = float(pair.get('priceChange', {}).get('m5', 0)) # Immediate trend
         price_change_1h = float(pair.get('priceChange', {}).get('h1', 0))
+        price_change_6h = float(pair.get('priceChange', {}).get('h6', 0))
         pair_created_at = pair.get('pairCreatedAt', None)
         base_token = pair.get('baseToken', {})
         token_address = base_token.get('address')
         
-        # 2. Relaxed "Validator" Logic
+        # 2. "The Validator" Logic (Strict Filters)
+        
+        # Liquidity & Volume Floors
         if liquidity < 8000: continue
         if volume_24h < 10000: continue
             
-        # Socials Check 
+        # Socials Check
         info = pair.get('info', {})
         socials = info.get('socials', [])
         websites = info.get('websites', [])
         if not socials and not websites:
             continue 
             
-        # 3. SECURITY AUDIT (New Layer)
+        # 3. "Trend Scanner" (Anti-Dump & Zombie Check)
+        
+        # Zombie Check: High volume but 0% price movement = Suspicious (Wash trading or Honeypot)
+        if volume_24h > 50000 and abs(price_change_1h) < 0.1:
+             print(f"⚠️  Skipping {base_token.get('symbol')}: Zombie Price Action (High Vol, 0% Move)")
+             continue
+
+        # Falling Knife Check: Crashed in last 5 mins
+        if price_change_m5 < -5:
+             print(f"⚠️  Skipping {base_token.get('symbol')}: Falling Knife (-{abs(price_change_m5)}% in 5m)")
+             continue
+             
+        # Dead Token Check: Down bad on the 6h
+        if price_change_6h < -30:
+             print(f"⚠️  Skipping {base_token.get('symbol')}: Dumped (-{abs(price_change_6h)}% in 6h)")
+             continue
+
+        # 4. SECURITY AUDIT (GoPlus)
         is_safe, audit_msg = check_security(token_address)
         if not is_safe:
             print(f"⚠️  Skipping {base_token.get('symbol')}: {audit_msg}")
             continue
 
-        # 4. Scoring System
+        # 5. Scoring System
         score = 0
+        if price_change_m5 > 0: score += 10 # Rising NOW
         if price_change_1h > 0: score += 20
         score += min(price_change_1h, 50) 
         
         ratio = volume_24h / liquidity
         if 0.5 < ratio < 10: score += 30
-        elif ratio > 10: score += 15
+        elif ratio > 10: score += 15 # Penalize insane ratios slightly in scoring (high risk)
             
         if pair_created_at:
             age_hours = (datetime.now().timestamp() - (pair_created_at/1000)) / 3600
